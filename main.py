@@ -1,5 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, status, Body
 from fastapi.security import OAuth2PasswordRequestForm
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import os
@@ -13,7 +15,7 @@ from app.auth import get_password_hash, verify_password, create_access_token
 app = FastAPI(title="Spanda E-Queue System")
 
 MODE = os.getenv("MODE", "central")
-CENTRAL_URL = os.getenv("CENTRAL_URL", "http://central-backend:8000")
+CENTRAL_URL = os.getenv("CENTRAL_URL", "http://central-server:8000")
 
 Base.metadata.create_all(bind=engine)
 
@@ -28,6 +30,7 @@ async def startup_event():
         db.commit()
     db.close()
 
+# API Endpoints
 @app.post("/token")
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == form_data.username).first()
@@ -35,11 +38,27 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
         raise HTTPException(status_code=400, detail="Incorrect username or password")
     return {"access_token": create_access_token(data={"sub": user.username, "role": user.role}), "token_type": "bearer"}
 
-@app.get("/services")
+@app.get("/api/services")
 def get_services(db: Session = Depends(get_db)):
     services = db.query(Service).filter(Service.parent_id == None).all()
     return [{"id": s.id, "code": s.code, "name": {"ru": s.name_ru, "ky": s.name_ky, "en": s.name_en}} for s in services]
 
-@app.get("/")
-def read_root():
+@app.get("/api/health")
+def health():
     return {"mode": MODE, "status": "online"}
+
+# Static Files Serving
+if os.path.exists("static"):
+    # First priority: actual files in the static folder (manifest, icons, etc)
+    @app.get("/{full_path:path}")
+    async def serve_static(full_path: str):
+        # Exclude API calls from static serving
+        if full_path.startswith("api/") or full_path == "api":
+             raise HTTPException(status_code=404)
+
+        file_path = os.path.join("static", full_path)
+        if os.path.isfile(file_path):
+            return FileResponse(file_path)
+
+        # Fallback to index.html for React routing
+        return FileResponse("static/index.html")

@@ -12,10 +12,8 @@ services:
     ports:
       - "5432:5432"
 
-  central-backend:
-    build:
-      context: .
-      dockerfile: backend.Dockerfile
+  central-server:
+    build: .
     environment:
       DATABASE_URL: postgresql://admin:Password123@central-db:5432/central_db
       MODE: central
@@ -40,13 +38,11 @@ services:
     ports:
       - "5433:5432"
 
-  branch-backend:
-    build:
-      context: .
-      dockerfile: backend.Dockerfile
+  branch-server:
+    build: .
     environment:
       DATABASE_URL: postgresql://admin:Password123@branch-db:5432/branch_db
-      CENTRAL_URL: http://central-backend:8000
+      CENTRAL_URL: http://central-server:8000
       MODE: branch
       REDIS_URL: redis://branch-redis:6379/0
     depends_on:
@@ -57,16 +53,6 @@ services:
 
   branch-redis:
     image: redis:7-alpine
-
-  frontend:
-    build:
-      context: .
-      dockerfile: frontend.Dockerfile
-    ports:
-      - "3000:3000"
-    environment:
-      - REACT_APP_CENTRAL_API=http://localhost:8000
-      - REACT_APP_BRANCH_API=http://localhost:8001
 
 volumes:
   central_db_data:
