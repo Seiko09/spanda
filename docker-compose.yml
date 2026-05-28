@@ -23,6 +23,7 @@ services:
       - central-redis
     ports:
       - "8000:8000"
+      - "3000:8000" # Backward compatibility for the user
 
   central-redis:
     image: redis:7-alpine

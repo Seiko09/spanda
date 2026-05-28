@@ -3,6 +3,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from typing import List, Optional
 import os
 import datetime
@@ -17,20 +18,39 @@ app = FastAPI(title="Spanda E-Queue System")
 MODE = os.getenv("MODE", "central")
 CENTRAL_URL = os.getenv("CENTRAL_URL", "http://central-server:8000")
 
-Base.metadata.create_all(bind=engine)
-
 @app.on_event("startup")
 async def startup_event():
-    db = next(get_db())
-    admin = db.query(User).filter(User.username == "admin").first()
-    if not admin:
-        hashed_password = get_password_hash("Password123")
-        db_admin = User(username="admin", password_hash=hashed_password, role=UserRole.ADMIN)
-        db.add(db_admin)
-        db.commit()
-    db.close()
+    # Wait for DB to be ready
+    db_ready = False
+    for i in range(20):
+        try:
+            db = next(get_db())
+            db.execute(text("SELECT 1"))
+            db.close()
+            db_ready = True
+            break
+        except Exception as e:
+            print(f"Waiting for database... {i}/20")
+            await asyncio.sleep(2)
 
-# API Endpoints
+    if db_ready:
+        Base.metadata.create_all(bind=engine)
+        db = next(get_db())
+        admin = db.query(User).filter(User.username == "admin").first()
+        if not admin:
+            hashed_password = get_password_hash("Password123")
+            db_admin = User(username="admin", password_hash=hashed_password, role=UserRole.ADMIN)
+            db.add(db_admin)
+            db.commit()
+        db.close()
+    else:
+        print("Could not connect to database. Starting in limited mode.")
+
+# --- API ---
+@app.get("/api/health")
+def health():
+    return {"mode": MODE, "status": "online", "time": datetime.datetime.utcnow()}
+
 @app.post("/token")
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == form_data.username).first()
@@ -40,25 +60,32 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
 
 @app.get("/api/services")
 def get_services(db: Session = Depends(get_db)):
-    services = db.query(Service).filter(Service.parent_id == None).all()
-    return [{"id": s.id, "code": s.code, "name": {"ru": s.name_ru, "ky": s.name_ky, "en": s.name_en}} for s in services]
+    try:
+        services = db.query(Service).filter(Service.parent_id == None).all()
+        return [{"id": s.id, "code": s.code, "name": {"ru": s.name_ru, "ky": s.name_ky, "en": s.name_en}} for s in services]
+    except Exception:
+        return []
 
-@app.get("/api/health")
-def health():
-    return {"mode": MODE, "status": "online"}
+# --- Static Files ---
+STATIC_DIR = "static"
 
-# Static Files Serving
-if os.path.exists("static"):
-    # First priority: actual files in the static folder (manifest, icons, etc)
-    @app.get("/{full_path:path}")
-    async def serve_static(full_path: str):
-        # Exclude API calls from static serving
-        if full_path.startswith("api/") or full_path == "api":
-             raise HTTPException(status_code=404)
+if os.path.exists(os.path.join(STATIC_DIR, "static")):
+    app.mount("/static", StaticFiles(directory=os.path.join(STATIC_DIR, "static")), name="static")
 
-        file_path = os.path.join("static", full_path)
-        if os.path.isfile(file_path):
-            return FileResponse(file_path)
+@app.get("/{full_path:path}")
+async def serve_frontend(full_path: str):
+    # Do not serve static files for API routes
+    if full_path.startswith("api") or full_path == "token" or full_path == "docs" or full_path == "openapi.json":
+        raise HTTPException(status_code=404)
 
-        # Fallback to index.html for React routing
-        return FileResponse("static/index.html")
+    # Check if it's a direct file request (e.g. favicon.ico, logo.png)
+    file_path = os.path.join(STATIC_DIR, full_path)
+    if os.path.isfile(file_path):
+        return FileResponse(file_path)
+
+    # For all other paths, serve index.html (React Router)
+    index_path = os.path.join(STATIC_DIR, "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+
+    return {"message": "Server is running, but Frontend assets were not found in /app/static. If you are developing locally, make sure to build the frontend."}
