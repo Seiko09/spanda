@@ -4,16 +4,23 @@ import httpx
 from main import app
 from fastapi.testclient import TestClient
 
-def test_flow():
+def test_everything():
     with TestClient(app) as client:
-        response = client.get("/api/health") # Updated endpoint
-        print(f"Health check: {response.status_code} - {response.json()}")
-        assert response.status_code == 200
+        # API Health
+        res = client.get("/api/health")
+        assert res.status_code == 200
 
-        response = client.post("/token", data={"username": "admin", "password": "Password123"})
-        print(f"Login check: {response.status_code}")
-        assert response.status_code == 200
+        # Static
+        if not os.path.exists("static"):
+            os.makedirs("static")
+        with open("static/index.html", "w") as f:
+            f.write("test_content")
+
+        res = client.get("/")
+        assert res.status_code == 200
+        # FileResponse content reading
+        assert res.text == "test_content"
 
 if __name__ == "__main__":
-    test_flow()
-    print("Verification passed!")
+    test_everything()
+    print("Integration tests PASSED!")

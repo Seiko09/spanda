@@ -1,12 +1,12 @@
-# Stage 1: Build Frontend
-FROM node:18-alpine as frontend-builder
-WORKDIR /frontend
+# --- STEP 1: Build React ---
+FROM node:18-alpine AS frontend-builder
+WORKDIR /build-dir
 COPY frontend/package.json ./
 RUN npm install
 COPY frontend/ ./
 RUN npm run build
 
-# Stage 2: Backend & Runtime
+# --- STEP 2: Final Image ---
 FROM python:3.11-slim
 WORKDIR /app
 
@@ -18,10 +18,10 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy backend code
+# Copy backend
 COPY . .
 
-# Copy built frontend from Stage 1 into the static folder
-COPY --from=frontend-builder /frontend/build /app/static
+# Copy built frontend
+COPY --from=frontend-builder /build-dir/build /app/static
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

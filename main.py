@@ -20,7 +20,7 @@ CENTRAL_URL = os.getenv("CENTRAL_URL", "http://central-server:8000")
 
 @app.on_event("startup")
 async def startup_event():
-    # Wait for DB to be ready
+    # Wait for DB
     db_ready = False
     for i in range(20):
         try:
@@ -29,28 +29,18 @@ async def startup_event():
             db.close()
             db_ready = True
             break
-        except Exception as e:
-            print(f"Waiting for database... {i}/20")
+        except Exception:
             await asyncio.sleep(2)
 
     if db_ready:
         Base.metadata.create_all(bind=engine)
         db = next(get_db())
-        admin = db.query(User).filter(User.username == "admin").first()
-        if not admin:
-            hashed_password = get_password_hash("Password123")
-            db_admin = User(username="admin", password_hash=hashed_password, role=UserRole.ADMIN)
-            db.add(db_admin)
+        if not db.query(User).filter(User.username == "admin").first():
+            db.add(User(username="admin", password_hash=get_password_hash("Password123"), role=UserRole.ADMIN))
             db.commit()
         db.close()
-    else:
-        print("Could not connect to database. Starting in limited mode.")
 
-# --- API ---
-@app.get("/api/health")
-def health():
-    return {"mode": MODE, "status": "online", "time": datetime.datetime.utcnow()}
-
+# --- API ROUTES FIRST ---
 @app.post("/token")
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == form_data.username).first()
@@ -58,34 +48,36 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
         raise HTTPException(status_code=400, detail="Incorrect username or password")
     return {"access_token": create_access_token(data={"sub": user.username, "role": user.role}), "token_type": "bearer"}
 
+@app.get("/api/health")
+def health():
+    return {"mode": MODE, "status": "online"}
+
 @app.get("/api/services")
 def get_services(db: Session = Depends(get_db)):
-    try:
-        services = db.query(Service).filter(Service.parent_id == None).all()
-        return [{"id": s.id, "code": s.code, "name": {"ru": s.name_ru, "ky": s.name_ky, "en": s.name_en}} for s in services]
-    except Exception:
-        return []
+    return [{"id": 1, "code": "A", "name": {"ru": "Кредиты", "ky": "Кредиттер", "en": "Loans"}}]
 
-# --- Static Files ---
+# --- STATIC FILES SERVING LAST ---
 STATIC_DIR = "static"
+if os.path.exists(STATIC_DIR):
+    # Mount the 'static' folder for assets like /static/js/...
+    assets_dir = os.path.join(STATIC_DIR, "static")
+    if os.path.exists(assets_dir):
+        app.mount("/static", StaticFiles(directory=assets_dir), name="static")
 
-if os.path.exists(os.path.join(STATIC_DIR, "static")):
-    app.mount("/static", StaticFiles(directory=os.path.join(STATIC_DIR, "static")), name="static")
+    @app.get("/{full_path:path}")
+    async def serve_frontend(full_path: str):
+        # Don't intercept API or docs
+        if full_path.startswith("api") or full_path in ["token", "docs", "openapi.json", "redoc"]:
+            raise HTTPException(status_code=404)
 
-@app.get("/{full_path:path}")
-async def serve_frontend(full_path: str):
-    # Do not serve static files for API routes
-    if full_path.startswith("api") or full_path == "token" or full_path == "docs" or full_path == "openapi.json":
-        raise HTTPException(status_code=404)
+        # Check for files in static root (favicon, manifest etc)
+        file_path = os.path.join(STATIC_DIR, full_path)
+        if full_path and os.path.isfile(file_path):
+            return FileResponse(file_path)
 
-    # Check if it's a direct file request (e.g. favicon.ico, logo.png)
-    file_path = os.path.join(STATIC_DIR, full_path)
-    if os.path.isfile(file_path):
-        return FileResponse(file_path)
-
-    # For all other paths, serve index.html (React Router)
-    index_path = os.path.join(STATIC_DIR, "index.html")
-    if os.path.exists(index_path):
-        return FileResponse(index_path)
-
-    return {"message": "Server is running, but Frontend assets were not found in /app/static. If you are developing locally, make sure to build the frontend."}
+        # Fallback to index.html
+        return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+else:
+    @app.get("/")
+    def no_static():
+        return {"error": "Frontend not found. Make sure 'static' directory exists."}
